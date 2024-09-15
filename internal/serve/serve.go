@@ -13,7 +13,8 @@ import (
 )
 
 type Config struct {
-	Host        string `env:"HOST"`
+	AstHost     string `env:"AST_HOST"`
+	ServiceHost string `env:"SERVICE_HOST"`
 	AppName     string `env:"APP_NAME" envDefault:"vouncer"`
 	Credentials string `env:"CREDENTIALS"`
 }
@@ -26,11 +27,12 @@ type Call struct {
 
 var callStore = map[string]Call{}
 var client *ari.Client
+var serviceUrl string
 
 func Start(ctx context.Context, cfg Config) int {
 	u := url.URL{
 		Scheme: "ws",
-		Host:   cfg.Host,
+		Host:   cfg.AstHost,
 		Path:   "/ari/events",
 	}
 	params := url.Values{}
@@ -51,7 +53,13 @@ func Start(ctx context.Context, cfg Config) int {
 	}
 	slog.Info("Connected successfully")
 
-	client = ari.New("http", cfg.Host, cfg.AppName, cfg.Credentials)
+	client = ari.New("http", cfg.AstHost, cfg.AppName, cfg.Credentials)
+
+	serviceUrl, err = url.JoinPath(cfg.ServiceHost, "/bouncer")
+	if err != nil {
+		slog.Error("Failed to create service URL", slog.String("reason", err.Error()))
+		return 2
+	}
 
 	return serve(ctx, c)
 }
@@ -160,8 +168,7 @@ func handleStart(payload []byte) {
 		return
 	}
 
-	// TODO: Don't hardcode this
-	res, err := http.Post("http://localhost:8080/bouncer", "application/json", bytes.NewReader(bodyBytes))
+	res, err := http.Post(serviceUrl, "application/json", bytes.NewReader(bodyBytes))
 	if err != nil {
 		slog.Error("Failed to post body", slog.String("msg", err.Error()))
 		return
