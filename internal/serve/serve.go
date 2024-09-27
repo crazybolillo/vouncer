@@ -48,7 +48,7 @@ func Start(ctx context.Context, cfg Config) int {
 	)
 	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		slog.Error("Websocket connection failed", slog.String("msg", err.Error()))
+		slog.Error("Websocket connection failed", slog.String("reason", err.Error()))
 		return 1
 	}
 	slog.Info("Connected successfully")
@@ -68,13 +68,13 @@ func serve(ctx context.Context, conn *websocket.Conn) int {
 	for {
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
-			slog.Error("Websocket read failed", slog.String("msg", err.Error()))
+			slog.Error("Websocket read failed", slog.String("reason", err.Error()))
 			return 1
 		}
 
 		evt := ari.Event{}
 		if err := json.Unmarshal(payload, &evt); err != nil {
-			slog.Error("Websocket message processing failed", slog.String("msg", err.Error()))
+			slog.Error("Websocket message processing failed", slog.String("reason", err.Error()))
 		}
 
 		switch evt.Type {
@@ -102,7 +102,7 @@ type BouncerResponse struct {
 func handleEnd(payload []byte) {
 	var msg ari.StasisEnd
 	if err := json.Unmarshal(payload, &msg); err != nil {
-		slog.Error("Failed to unmarshal message", slog.String("msg", err.Error()))
+		slog.Error("Failed to unmarshal message", slog.String("reason", err.Error()))
 		return
 	}
 
@@ -126,7 +126,7 @@ func joinChannels(call Call) {
 
 	brid, err := client.BridgeCreate()
 	if err != nil {
-		slog.Error("Failed to create bridge", slog.String("msg", err.Error()))
+		slog.Error("Failed to create bridge", slog.String("reason", err.Error()))
 		return
 	}
 	client.ChannelRing(call.From, false)
@@ -139,7 +139,7 @@ func joinChannels(call Call) {
 	err = client.BridgeAddChannel(brid, call.From)
 	err = errors.Join(err, client.BridgeAddChannel(brid, call.To))
 	if err != nil {
-		slog.Error("Failed to join channels. Tearing down resources", slog.String("msg", err.Error()))
+		slog.Error("Failed to join channels. Tearing down resources", slog.String("reason", err.Error()))
 		teardownCall(call)
 	}
 }
@@ -148,7 +148,7 @@ func handleStart(payload []byte) {
 	var msg ari.StasisStart
 	err := json.Unmarshal(payload, &msg)
 	if err != nil {
-		slog.Error("Failed to unmarshal message", slog.String("msg", err.Error()))
+		slog.Error("Failed to unmarshal message", slog.String("reason", err.Error()))
 		return
 	}
 
@@ -164,19 +164,19 @@ func handleStart(payload []byte) {
 	}
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
-		slog.Error("Failed to marshal body", slog.String("msg", err.Error()))
+		slog.Error("Failed to marshal body", slog.String("reason", err.Error()))
 		return
 	}
 
 	res, err := http.Post(serviceUrl, "application/json", bytes.NewReader(bodyBytes))
 	if err != nil {
-		slog.Error("Failed to post body", slog.String("msg", err.Error()))
+		slog.Error("Failed to post body", slog.String("reason", err.Error()))
 		return
 	}
 
 	result := &BouncerResponse{}
 	if err := json.NewDecoder(res.Body).Decode(result); err != nil {
-		slog.Error("Failed to unmarshal body", slog.String("msg", err.Error()))
+		slog.Error("Failed to unmarshal body", slog.String("reason", err.Error()))
 		return
 	}
 
@@ -187,7 +187,7 @@ func handleStart(payload []byte) {
 	}
 	dst, err := client.ChannelDial(result.Endpoint, "vouncer", params, chanVars)
 	if err != nil {
-		slog.Error("Failed to dial far end", slog.String("msg", err.Error()))
+		slog.Error("Failed to dial far end", slog.String("reason", err.Error()))
 		return
 	}
 	client.ChannelSetVar(msg.Chan.ID, "CDR(userfield)", result.Endpoint)

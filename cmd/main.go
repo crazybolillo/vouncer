@@ -15,7 +15,7 @@ func main() {
 func run(ctx context.Context) int {
 	cfg, err := env.ParseAs[serve.Config]()
 	if err != nil {
-		slog.Error("Failed to parse configuration", slog.String("msg", err.Error()))
+		slog.Error("Failed to parse configuration", slog.String("reason", err.Error()))
 		return 1
 	}
 
