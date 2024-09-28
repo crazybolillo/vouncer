@@ -90,6 +90,8 @@ func serve(ctx context.Context, conn *websocket.Conn, debug bool) int {
 		switch evt.Type {
 		case "StasisStart":
 			handleStart(payload)
+		case "ChannelHangupRequest":
+			fallthrough
 		case "StasisEnd":
 			handleEnd(payload)
 		default:
