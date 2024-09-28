@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/gorilla/websocket"
 	"log/slog"
 	"net/http"
@@ -144,6 +145,61 @@ func joinChannels(call Call) {
 	}
 }
 
+func dialFarEnd(msg ari.StasisStart) error {
+	body := BouncerRequest{
+		Endpoint:  msg.Chan.AccountCode,
+		Extension: msg.Chan.Plan.Extension,
+	}
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	res, err := http.Post(serviceUrl, "application/json", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("failed connection to service: %w", err)
+	}
+
+	result := &BouncerResponse{}
+	if err = json.NewDecoder(res.Body).Decode(result); err != nil {
+		return fmt.Errorf("failed to decode bouncer response: %w", err)
+	}
+
+	if !result.Allow {
+		return errors.New("call is not allowed")
+	}
+
+	params := url.Values{}
+	params.Set("callerId", result.CallerID)
+	chanVars := map[string]string{
+		"CDR_PROP(disable)": "1",
+	}
+
+	dst, err := client.ChannelDial(result.Endpoint, "vouncer", params, chanVars)
+	if err != nil {
+		return fmt.Errorf("")
+	}
+
+	err = client.ChannelSetVar(msg.Chan.ID, "CDR(userfield)", result.Endpoint)
+	if err != nil {
+		slog.Warn("Unable to set CDR(userfield)", slog.String("chid", msg.Chan.ID), slog.String("reason", err.Error()))
+	}
+
+	err = client.ChannelRing(msg.Chan.ID, true)
+	if err != nil {
+		slog.Warn("Unable to set channel ring", slog.String("chid", msg.Chan.ID), slog.String("reason", err.Error()))
+	}
+
+	newCall := Call{
+		From: msg.Chan.ID,
+		To:   dst,
+	}
+	callStore[dst] = newCall
+	callStore[msg.Chan.ID] = newCall
+
+	return nil
+}
+
 func handleStart(payload []byte) {
 	var msg ari.StasisStart
 	err := json.Unmarshal(payload, &msg)
@@ -158,45 +214,16 @@ func handleStart(payload []byte) {
 		return
 	}
 
-	body := BouncerRequest{
-		Endpoint:  msg.Chan.Caller.Number,
-		Extension: msg.Chan.Plan.Extension,
+	err = dialFarEnd(msg)
+	if err == nil {
+		return
 	}
-	bodyBytes, err := json.Marshal(body)
+
+	slog.Error("Unable to dial far end", slog.String("reason", err.Error()))
+
+	err = client.ChannelDelete(msg.Chan.ID)
 	if err != nil {
-		slog.Error("Failed to marshal body", slog.String("reason", err.Error()))
-		return
+		slog.Error("Failed to delete channel", slog.String("chid", msg.Chan.ID), slog.String("reason", err.Error()))
 	}
 
-	res, err := http.Post(serviceUrl, "application/json", bytes.NewReader(bodyBytes))
-	if err != nil {
-		slog.Error("Failed to post body", slog.String("reason", err.Error()))
-		return
-	}
-
-	result := &BouncerResponse{}
-	if err := json.NewDecoder(res.Body).Decode(result); err != nil {
-		slog.Error("Failed to unmarshal body", slog.String("reason", err.Error()))
-		return
-	}
-
-	params := url.Values{}
-	params.Set("callerId", result.CallerID)
-	chanVars := map[string]string{
-		"CDR_PROP(disable)": "1",
-	}
-	dst, err := client.ChannelDial(result.Endpoint, "vouncer", params, chanVars)
-	if err != nil {
-		slog.Error("Failed to dial far end", slog.String("reason", err.Error()))
-		return
-	}
-	client.ChannelSetVar(msg.Chan.ID, "CDR(userfield)", result.Endpoint)
-	client.ChannelRing(msg.Chan.ID, true)
-
-	newCall := Call{
-		From: msg.Chan.ID,
-		To:   dst,
-	}
-	callStore[dst] = newCall
-	callStore[msg.Chan.ID] = newCall
 }

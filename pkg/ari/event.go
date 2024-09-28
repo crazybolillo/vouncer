@@ -25,12 +25,13 @@ type Member struct {
 }
 
 type Channel struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	State     string   `json:"state"`
-	Caller    Member   `json:"caller"`
-	Connected Member   `json:"connected"`
-	Plan      Dialplan `json:"dialplan"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	State       string   `json:"state"`
+	Caller      Member   `json:"caller"`
+	Connected   Member   `json:"connected"`
+	AccountCode string   `json:"accountcode"`
+	Plan        Dialplan `json:"dialplan"`
 }
 
 type Dialplan struct {
