@@ -19,5 +19,9 @@ func run(ctx context.Context) int {
 		return 1
 	}
 
+	if cfg.Debug {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
+
 	return serve.Start(ctx, cfg)
 }

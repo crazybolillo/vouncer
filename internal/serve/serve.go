@@ -18,6 +18,7 @@ type Config struct {
 	ServiceHost string `env:"SERVICE_HOST"`
 	AppName     string `env:"APP_NAME" envDefault:"vouncer"`
 	Credentials string `env:"CREDENTIALS"`
+	Debug       bool   `env:"DEBUG" envDefault:"false"`
 }
 
 type Call struct {
@@ -62,15 +63,23 @@ func Start(ctx context.Context, cfg Config) int {
 		return 2
 	}
 
-	return serve(ctx, c)
+	return serve(ctx, c, cfg.Debug)
 }
 
-func serve(ctx context.Context, conn *websocket.Conn) int {
+func serve(ctx context.Context, conn *websocket.Conn, debug bool) int {
 	for {
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
 			slog.Error("Websocket read failed", slog.String("reason", err.Error()))
 			return 1
+		}
+
+		if debug {
+			var pretty bytes.Buffer
+			err = json.Indent(&pretty, payload, "", "  ")
+			if err == nil {
+				slog.Debug(pretty.String())
+			}
 		}
 
 		evt := ari.Event{}
