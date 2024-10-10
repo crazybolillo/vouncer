@@ -51,3 +51,25 @@ type StasisEnd struct {
 type ChannelStateChange struct {
 	Chan Channel `json:"channel"`
 }
+
+type Bridge struct {
+	ID       string   `json:"id"`
+	Channels []string `json:"channels"`
+}
+
+type BridgeBlindTransfer struct {
+	Channel        Channel `json:"channel"`
+	Extension      string  `json:"exten"`
+	Result         string  `json:"result"`
+	Transferee     Channel `json:"transferee"`
+	ReplaceChannel Channel `json:"replace_channel"`
+}
+
+type ChannelMemberBridge struct {
+	Bridge  Bridge  `json:"bridge"`
+	Channel Channel `json:"channel"`
+}
+
+type BridgeDestroyed struct {
+	Bridge Bridge `json:"bridge"`
+}
