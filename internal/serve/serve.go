@@ -22,12 +22,13 @@ type Config struct {
 }
 
 type Call struct {
-	From   string
-	To     string
-	Bridge string
+	Channels map[string]bool
+	Bridge   string
 }
 
-var callStore = map[string]Call{}
+var channelIndex = map[string]*Call{}
+var bridgeIndex = map[string]*Call{}
+
 var client *ari.Client
 var serviceUrl string
 
@@ -90,6 +91,14 @@ func serve(ctx context.Context, conn *websocket.Conn, debug bool) int {
 		switch evt.Type {
 		case "StasisStart":
 			handleStart(payload)
+		case "ChannelEnteredBridge":
+			handleChannelEnteredBridge(payload)
+		case "ChannelLeftBridge":
+			handleChannelLeftBridge(payload)
+		case "BridgeBlindTransfer":
+			handleBlindTransfer(payload)
+		case "BridgeDestroyed":
+			handleBridgeDestroyed(payload)
 		case "ChannelHangupRequest":
 			fallthrough
 		case "StasisEnd":
@@ -118,40 +127,59 @@ func handleEnd(payload []byte) {
 		return
 	}
 
-	call, ok := callStore[msg.Chan.ID]
+	call, ok := channelIndex[msg.Chan.ID]
 	if !ok {
 		return
 	}
-	teardownCall(call)
-	delete(callStore, call.To)
-	delete(callStore, call.From)
+
+	_, ok = call.Channels[msg.Chan.ID]
+	if !ok {
+		delete(channelIndex, msg.Chan.ID)
+		return
+	}
+
+	if len(call.Channels) <= 2 {
+		teardownCall(call)
+		for channel, _ := range call.Channels {
+			delete(channelIndex, channel)
+		}
+	} else {
+		delete(call.Channels, msg.Chan.ID)
+		delete(channelIndex, msg.Chan.ID)
+	}
 }
 
-func teardownCall(call Call) {
-	_ = client.ChannelDelete(call.To)
-	_ = client.ChannelDelete(call.From)
+func teardownCall(call *Call) {
+	for channel, _ := range call.Channels {
+		_ = client.ChannelDelete(channel)
+	}
 	_ = client.BridgeDelete(call.Bridge)
 }
 
-func joinChannels(call Call) {
-	slog.Info("Joining channels", slog.String("from", call.From), slog.String("to", call.To))
-
-	brid, err := client.BridgeCreate()
-	if err != nil {
-		slog.Error("Failed to create bridge", slog.String("reason", err.Error()))
-		return
+func joinChannels(call *Call) {
+	if call.Bridge == "" {
+		brid, err := client.BridgeCreate()
+		if err != nil {
+			slog.Error("Failed to create bridge", slog.String("reason", err.Error()))
+			return
+		}
+		call.Bridge = brid
+		bridgeIndex[brid] = call
 	}
-	client.ChannelRing(call.From, false)
-	client.ChannelAnswer(call.From)
 
-	call.Bridge = brid
-	callStore[call.From] = call
-	callStore[call.To] = call
+	var err error
+	for channel, joined := range call.Channels {
+		if joined {
+			continue
+		}
 
-	err = client.BridgeAddChannel(brid, call.From)
-	err = errors.Join(err, client.BridgeAddChannel(brid, call.To))
+		_ = client.ChannelRing(channel, false)
+		_ = client.ChannelAnswer(channel)
+		err = errors.Join(client.BridgeAddChannel(call.Bridge, channel))
+	}
+
 	if err != nil {
-		slog.Error("Failed to join channels. Tearing down resources", slog.String("reason", err.Error()))
+		slog.Error("Failed to join channels. Tearing down resources", "reason", err)
 		teardownCall(call)
 	}
 }
@@ -201,12 +229,14 @@ func dialFarEnd(msg ari.StasisStart) error {
 		slog.Warn("Unable to set channel ring", slog.String("chid", msg.Chan.ID), slog.String("reason", err.Error()))
 	}
 
-	newCall := Call{
-		From: msg.Chan.ID,
-		To:   dst,
+	newCall := &Call{
+		Channels: map[string]bool{
+			dst:         false,
+			msg.Chan.ID: false,
+		},
 	}
-	callStore[dst] = newCall
-	callStore[msg.Chan.ID] = newCall
+	channelIndex[dst] = newCall
+	channelIndex[msg.Chan.ID] = newCall
 
 	return nil
 }
@@ -219,7 +249,14 @@ func handleStart(payload []byte) {
 		return
 	}
 
-	call, ok := callStore[msg.Chan.ID]
+	if msg.Chan.State == "Down" {
+		return
+	}
+	if msg.Chan.Plan.Context == "transfer" && msg.Chan.Plan.Extension == "_attended" {
+		return
+	}
+
+	call, ok := channelIndex[msg.Chan.ID]
 	if ok {
 		joinChannels(call)
 		return
@@ -236,5 +273,75 @@ func handleStart(payload []byte) {
 	if err != nil {
 		slog.Error("Failed to delete channel", slog.String("chid", msg.Chan.ID), slog.String("reason", err.Error()))
 	}
+}
 
+func handleBridgeDestroyed(payload []byte) {
+	var msg ari.BridgeDestroyed
+	err := json.Unmarshal(payload, &msg)
+	if err != nil {
+		slog.Error("Failed to unmarshall message", "reason", err)
+	}
+
+	call, ok := bridgeIndex[msg.Bridge.ID]
+	if !ok {
+		return
+	}
+
+	teardownCall(call)
+	delete(bridgeIndex, msg.Bridge.ID)
+}
+
+func handleBlindTransfer(payload []byte) {
+	var msg ari.BridgeBlindTransfer
+	err := json.Unmarshal(payload, &msg)
+	if err != nil {
+		slog.Error("Failed to unmarshal message", "reason", err)
+		return
+	}
+
+	slog.Info("Call transfer initiated", "src", msg.Channel.ID, "dst", msg.ReplaceChannel.ID)
+	call, ok := channelIndex[msg.Channel.ID]
+	if !ok {
+		return
+	}
+
+	delete(call.Channels, msg.Channel.ID)
+	delete(channelIndex, msg.Channel.ID)
+
+	call.Channels[msg.ReplaceChannel.ID] = true
+	channelIndex[msg.ReplaceChannel.ID] = call
+}
+
+func handleChannelEnteredBridge(payload []byte) {
+	var msg ari.ChannelMemberBridge
+	err := json.Unmarshal(payload, &msg)
+	if err != nil {
+		slog.Error("Failed to unmarshal message", "reason", err)
+		return
+	}
+
+	call, ok := bridgeIndex[msg.Bridge.ID]
+	if !ok {
+		return
+	}
+
+	call.Channels[msg.Channel.ID] = true
+	channelIndex[msg.Channel.ID] = call
+}
+
+func handleChannelLeftBridge(payload []byte) {
+	var msg ari.ChannelMemberBridge
+	err := json.Unmarshal(payload, &msg)
+	if err != nil {
+		slog.Error("Failed to unmarshal message", "reason", err)
+		return
+	}
+
+	bridge, ok := bridgeIndex[msg.Bridge.ID]
+	if !ok {
+		return
+	}
+
+	delete(channelIndex, msg.Channel.ID)
+	delete(bridge.Channels, msg.Channel.ID)
 }
