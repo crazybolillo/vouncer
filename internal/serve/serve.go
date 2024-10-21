@@ -185,8 +185,15 @@ func joinChannels(call *Call) {
 }
 
 func dialFarEnd(msg ari.StasisStart) error {
+	var endpoint string
+	if msg.Chan.AccountCode != "" {
+		endpoint = msg.Chan.AccountCode
+	} else {
+		endpoint = msg.Chan.Caller.Number
+	}
+
 	body := BouncerRequest{
-		Endpoint:  msg.Chan.AccountCode,
+		Endpoint:  endpoint,
 		Extension: msg.Chan.Plan.Extension,
 	}
 	bodyBytes, err := json.Marshal(body)
