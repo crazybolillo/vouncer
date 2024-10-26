@@ -9,6 +9,7 @@ import (
 )
 
 var ErrNotFound = errors.New("resource not found")
+var ErrCallNotAllowed = errors.New("call not allowed")
 
 type Client struct {
 	Scheme      string

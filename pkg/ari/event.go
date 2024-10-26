@@ -73,3 +73,15 @@ type ChannelMemberBridge struct {
 type BridgeDestroyed struct {
 	Bridge Bridge `json:"bridge"`
 }
+
+type Playback struct {
+	ID        string `json:"id"`
+	MediaURI  string `json:"media_uri"`
+	TargetURI string `json:"target_uri"`
+	Language  string `json:"language"`
+	State     string `json:"state"`
+}
+
+type PlaybackFinished struct {
+	Playback Playback `json:"playback"`
+}
