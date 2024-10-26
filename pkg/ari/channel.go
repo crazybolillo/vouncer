@@ -119,3 +119,24 @@ func (c *Client) ChannelRing(chid string, state bool) error {
 
 	return nil
 }
+
+func (c *Client) ChannelPlay(chid string, media string) error {
+	params := url.Values{}
+	params.Set("media", media)
+
+	res, err := c.Post(
+		fmt.Sprintf("/ari/channels/%s/play", chid),
+		"",
+		&params,
+		nil,
+	)
+
+	if err != nil {
+		return err
+	}
+	if res.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("unexpected status code %d", res.StatusCode)
+	}
+
+	return nil
+}

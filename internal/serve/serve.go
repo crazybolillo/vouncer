@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
 	"vouncer/pkg/ari"
 )
 
@@ -91,6 +93,8 @@ func serve(ctx context.Context, conn *websocket.Conn, debug bool) int {
 		switch evt.Type {
 		case "StasisStart":
 			handleStart(payload)
+		case "PlaybackFinished":
+			handlePlaybackFinished(payload)
 		case "ChannelEnteredBridge":
 			handleChannelEnteredBridge(payload)
 		case "ChannelLeftBridge":
@@ -212,7 +216,7 @@ func dialFarEnd(msg ari.StasisStart) error {
 	}
 
 	if !result.Allow {
-		return errors.New("call is not allowed")
+		return ari.ErrCallNotAllowed
 	}
 
 	params := url.Values{}
@@ -272,10 +276,27 @@ func handleStart(payload []byte) {
 	err = dialFarEnd(msg)
 	if err == nil {
 		return
+	} else if errors.Is(ari.ErrCallNotAllowed, err) {
+		call := Call{
+			Channels: map[string]bool{
+				msg.Chan.ID: true,
+			},
+			Bridge: "",
+		}
+		channelIndex[msg.Chan.ID] = &call
+
+		go func() {
+			client.ChannelRing(msg.Chan.ID, true)
+			time.Sleep(2 * time.Second)
+			client.ChannelRing(msg.Chan.ID, false)
+			client.ChannelAnswer(msg.Chan.ID)
+			time.Sleep(1 * time.Second)
+			client.ChannelPlay(msg.Chan.ID, "sound:/sounds/vouncer_reject")
+		}()
+		return
 	}
 
 	slog.Error("Unable to dial far end", slog.String("reason", err.Error()))
-
 	err = client.ChannelDelete(msg.Chan.ID)
 	if err != nil {
 		slog.Error("Failed to delete channel", slog.String("chid", msg.Chan.ID), slog.String("reason", err.Error()))
@@ -351,4 +372,24 @@ func handleChannelLeftBridge(payload []byte) {
 
 	delete(channelIndex, msg.Channel.ID)
 	delete(bridge.Channels, msg.Channel.ID)
+}
+
+func handlePlaybackFinished(payload []byte) {
+	var msg ari.PlaybackFinished
+	err := json.Unmarshal(payload, &msg)
+	if err != nil {
+		slog.Error("Failed to unmarshal message", "reason", err)
+	}
+
+	channelId := strings.TrimPrefix(msg.Playback.TargetURI, "channel:")
+	call, ok := channelIndex[channelId]
+	if !ok {
+		slog.Warn("Couldn't find channel", "event", "PlaybackFinished", "chid", channelId)
+		return
+	}
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		teardownCall(call)
+	}()
 }
