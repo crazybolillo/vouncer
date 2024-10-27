@@ -19,3 +19,16 @@ This app name will need to be stated in Asterisk's dialplan to pass call control
 
 ### `CREDENTIALS`
 The username and password to authenticate with ARI. It must be in the format `username:password`.
+
+### `DEBUG`
+If true, all Stasis messages will be printed to the console.
+
+## Required sound files
+To provide a good user experience certain files are played back to the user when a call is rejected or not answered.
+The path to this files is not customizable to they need to be placed in the following locations:
+
+### `/sounds/vouncer_reject`
+Played when a call is not allowed, this can happen when the extension does not exist or the user has no permission.
+
+### `/sounds/vouncer_timeout`
+Played when the far end declines the call or the dial application times out.
