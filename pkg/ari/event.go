@@ -85,3 +85,9 @@ type Playback struct {
 type PlaybackFinished struct {
 	Playback Playback `json:"playback"`
 }
+
+type ChannelDestroyed struct {
+	Cause     int     `json:"cause"`
+	CauseText string  `json:"cause_txt"`
+	Channel   Channel `json:"channel"`
+}

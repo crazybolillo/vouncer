@@ -24,8 +24,13 @@ type Config struct {
 }
 
 type Call struct {
-	Channels map[string]bool
+	Channels map[string]*Channel
 	Bridge   string
+}
+
+type Channel struct {
+	Ringing bool
+	Joined  bool
 }
 
 var channelIndex = map[string]*Call{}
@@ -103,6 +108,8 @@ func serve(ctx context.Context, conn *websocket.Conn, debug bool) int {
 			handleBlindTransfer(payload)
 		case "BridgeDestroyed":
 			handleBridgeDestroyed(payload)
+		case "ChannelDestroyed":
+			handleChannelDestroyed(payload)
 		case "ChannelHangupRequest":
 			fallthrough
 		case "StasisEnd":
@@ -144,9 +151,6 @@ func handleEnd(payload []byte) {
 
 	if len(call.Channels) <= 2 {
 		teardownCall(call)
-		for channel, _ := range call.Channels {
-			delete(channelIndex, channel)
-		}
 	} else {
 		delete(call.Channels, msg.Chan.ID)
 		delete(channelIndex, msg.Chan.ID)
@@ -154,8 +158,20 @@ func handleEnd(payload []byte) {
 }
 
 func teardownCall(call *Call) {
-	for channel, _ := range call.Channels {
-		_ = client.ChannelDelete(channel)
+	for chid, channel := range call.Channels {
+		if !channel.Ringing {
+			slog.Info("Deleting channel", "chid", chid)
+			_ = client.ChannelDelete(chid)
+			delete(channelIndex, chid)
+		} else {
+			channel.Ringing = false
+			go func() {
+				_ = client.ChannelAnswer(chid)
+				time.Sleep(1 * time.Second)
+				slog.Info("Playing vouncer_timeout", "chid", chid)
+				_ = client.ChannelPlay(chid, "sound:/sounds/vouncer_timeout")
+			}()
+		}
 	}
 	_ = client.BridgeDelete(call.Bridge)
 }
@@ -172,14 +188,14 @@ func joinChannels(call *Call) {
 	}
 
 	var err error
-	for channel, joined := range call.Channels {
-		if joined {
+	for chid, channel := range call.Channels {
+		if channel.Joined {
 			continue
 		}
 
-		_ = client.ChannelRing(channel, false)
-		_ = client.ChannelAnswer(channel)
-		err = errors.Join(client.BridgeAddChannel(call.Bridge, channel))
+		_ = client.ChannelRing(chid, false)
+		_ = client.ChannelAnswer(chid)
+		err = errors.Join(client.BridgeAddChannel(call.Bridge, chid))
 	}
 
 	if err != nil {
@@ -241,9 +257,9 @@ func dialFarEnd(msg ari.StasisStart) error {
 	}
 
 	newCall := &Call{
-		Channels: map[string]bool{
-			dst:         false,
-			msg.Chan.ID: false,
+		Channels: map[string]*Channel{
+			dst:         {},
+			msg.Chan.ID: {Ringing: true},
 		},
 	}
 	channelIndex[dst] = newCall
@@ -276,22 +292,22 @@ func handleStart(payload []byte) {
 	err = dialFarEnd(msg)
 	if err == nil {
 		return
-	} else if errors.Is(ari.ErrCallNotAllowed, err) {
+	} else if errors.Is(err, ari.ErrCallNotAllowed) {
 		call := Call{
-			Channels: map[string]bool{
-				msg.Chan.ID: true,
+			Channels: map[string]*Channel{
+				msg.Chan.ID: {},
 			},
 			Bridge: "",
 		}
 		channelIndex[msg.Chan.ID] = &call
 
 		go func() {
-			client.ChannelRing(msg.Chan.ID, true)
+			_ = client.ChannelRing(msg.Chan.ID, true)
 			time.Sleep(2 * time.Second)
-			client.ChannelRing(msg.Chan.ID, false)
-			client.ChannelAnswer(msg.Chan.ID)
+			_ = client.ChannelRing(msg.Chan.ID, false)
+			_ = client.ChannelAnswer(msg.Chan.ID)
 			time.Sleep(1 * time.Second)
-			client.ChannelPlay(msg.Chan.ID, "sound:/sounds/vouncer_reject")
+			_ = client.ChannelPlay(msg.Chan.ID, "sound:/sounds/vouncer_reject")
 		}()
 		return
 	}
@@ -336,7 +352,7 @@ func handleBlindTransfer(payload []byte) {
 	delete(call.Channels, msg.Channel.ID)
 	delete(channelIndex, msg.Channel.ID)
 
-	call.Channels[msg.ReplaceChannel.ID] = true
+	call.Channels[msg.ReplaceChannel.ID] = &Channel{Joined: true}
 	channelIndex[msg.ReplaceChannel.ID] = call
 }
 
@@ -353,7 +369,7 @@ func handleChannelEnteredBridge(payload []byte) {
 		return
 	}
 
-	call.Channels[msg.Channel.ID] = true
+	call.Channels[msg.Channel.ID] = &Channel{Joined: true}
 	channelIndex[msg.Channel.ID] = call
 }
 
@@ -388,8 +404,32 @@ func handlePlaybackFinished(payload []byte) {
 		return
 	}
 
-	go func() {
-		time.Sleep(1 * time.Second)
-		teardownCall(call)
-	}()
+	if msg.Playback.MediaURI == "sound:/sounds/vouncer_reject" || msg.Playback.MediaURI == "sound:/sounds/vouncer_timeout" {
+		go func() {
+			time.Sleep(1 * time.Second)
+			teardownCall(call)
+		}()
+	}
+}
+
+func handleChannelDestroyed(payload []byte) {
+	var msg ari.ChannelDestroyed
+	err := json.Unmarshal(payload, &msg)
+	if err != nil {
+		slog.Error("Failed to unmarshal message", "reason", err)
+	}
+
+	call, ok := channelIndex[msg.Channel.ID]
+	if !ok {
+		return
+	}
+
+	delete(call.Channels, msg.Channel.ID)
+	delete(channelIndex, msg.Channel.ID)
+
+	if len(call.Channels) != 1 {
+		return
+	}
+
+	teardownCall(call)
 }
